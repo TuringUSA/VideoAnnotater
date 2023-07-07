@@ -15,7 +15,7 @@ func IntializeMongodb() {
 
 	var err error
 
-	MongodbClient, err = mongo.Connect(context.TODO(), options.Client().ApplyUri(mongouri))
+	MongodbClient, err = mongo.Connect(context.TODO(), options.Client().ApplyURI(mongouri))
 
 	if err != nil {
 		panic(err)

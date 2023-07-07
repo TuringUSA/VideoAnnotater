@@ -1,13 +1,30 @@
 package main
 
 import (
-	"github.com/gofiber/fiber/v2"
+	"fmt"
+	"log"
+
+	"backend/Configs"
+	"backend/controllers"
+	"github.com/gin-gonic/gin"
 )
 
+func init() {
+	Configs.IntializeDotEnv()
+	Configs.IntializeMongodb()
+	Configs.IntializeGcpStorage()
+}
+
 func main() {
-	app := fiber.New()
+	app := gin.Default()
+	app.POST("/Videos", controllers.StoreVideo)
+	app.GET("/Videos", controllers.GetAnnotatedVideo)
 
-	app.Get("/", func(c *fiber.Ctx) error {
+	err := app.Run()
+	if err != nil {
+		log.Fatal(err.Error())
+		return
+	}
 
-	})
+	fmt.Println("Server running on port:8080")
 }

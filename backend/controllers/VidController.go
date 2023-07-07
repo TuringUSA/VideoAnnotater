@@ -1,5 +1,8 @@
 package controllers
 
+/**
+  Reference: https://github.com/GoogleCloudPlatform/golang-samples/blob/HEAD/videointelligence/video_analyze/video_analyze.go
+**/
 import (
 	"backend/Configs"
 	"context"
@@ -25,7 +28,7 @@ type Timestamp struct {
 	Stop  int64 `bson:"stop"`
 }
 
-type Annotation struct {
+type Feature struct {
 	Description string      `bson:"description"`
 	Timestamps  []Timestamp `bson:"timestamps"`
 }
@@ -36,9 +39,9 @@ type AnnotationBody struct {
 	PerPage int64  `form:"perPage"`
 }
 
-type paginatedResults struct {
+type PaginatedResult struct {
 	Videos     []Video
-	Pagination pag.PaginatedData
+	Pagination pag.PaginationData
 }
 
 type Video struct {
@@ -46,7 +49,7 @@ type Video struct {
 	Filename    string             `bson:"filename"`
 	Size        int                `bson:"size"`
 	UUID        string             `bson:"uuid"`
-	Annotations []Annotation       `bson:"features"`
+	Annotations []Feature          `bson:"features"`
 	SignedUrl   string
 }
 
@@ -93,7 +96,7 @@ func StoreVideo(c *gin.Context) {
 
 	annotationOp, err := client.AnnotateVideo(ctx, &videopb.AnnotateVideoRequest{
 		InputUri: "gs://" + os.Getenv("GCP_STORAGE_BUCKET") + "/" + fileUuid.String(),
-		Annotations: []videopb.Annotation{
+		Features: []videopb.Feature{
 			videopb.Feature_LABEL_DETECTION,
 		},
 	})
@@ -108,7 +111,7 @@ func StoreVideo(c *gin.Context) {
 	}
 	result := resp.GetAnnotationResults()[0]
 
-	var annotsList []Annotation
+	var annotsList []Feature
 	for _, annotation := range result.SegmentLabelAnnotations {
 
 		var timestamps []Timestamp
@@ -121,11 +124,11 @@ func StoreVideo(c *gin.Context) {
 			})
 		}
 
-		f := Annotation{Description: annotation.Entity.Description, Timestamps: timestamps}
+		f := Feature{Description: annotation.Entity.Description, Timestamps: timestamps}
 		annotsList = append(annotsList, f)
 	}
 
-	filter := bson.D{{"_id", mongoRecord.InsertID}}
+	filter := bson.D{{"_id", mongoRecord.InsertedID}}
 	update := bson.D{{"$set", bson.D{{"features", annotsList}}}}
 	_, err = mongo_db.UpdateOne(context.TODO(), filter, update)
 	if err != nil {
@@ -137,7 +140,7 @@ func StoreVideo(c *gin.Context) {
 	})
 }
 
-func getAnnotatedVideo(c *gin.Context) {
+func GetAnnotatedVideo(c *gin.Context) {
 	var annotBody AnnotationBody
 	err := c.BindQuery(&annotBody)
 	if err != nil {
@@ -146,11 +149,17 @@ func getAnnotatedVideo(c *gin.Context) {
 		return
 	}
 
-	collection := Configs.MomgoClient.Database(os.Getenv("MONGO_DB")).Collection("videos")
+	collection := Configs.MongodbClient.Database(os.Getenv("MONGODB_NAME")).Collection("videos")
 
-	indexStage := bson.M{"$search": bson.D{{"index", os.Getenv("MONGO_DB_SEARCH_INDEX")}, {"text", bson.D{{"wildcard", "*"}}}, {"query", annotBody.Keyword}}}
+	indexStage := bson.M{
+		"$search": bson.D{
+			{"index", os.Getenv("MONGODB_SEARCH_INDEX")},
+			{"text", bson.D{{"wildcard", "*"}}},
+			{"query", annotBody.Keyword},
+		},
+	}
 
-	paginatedData, err := pag.New(collection).Context(context.TODO()).Limit(annotBody.PerPage).Page(annotBody.Page).Aggregate(indexStage)
+	aggPaginatedData, err := pag.New(collection).Context(context.TODO()).Limit(annotBody.PerPage).Page(annotBody.Page).Aggregate(indexStage)
 	if err != nil {
 		panic(err)
 	}
@@ -163,13 +172,17 @@ func getAnnotatedVideo(c *gin.Context) {
 		Expires: time.Now().Add(15 * time.Minute),
 	}
 
-	var output []Video
-	for _, raw := range paginatedData.Data {
+	output := []Video{}
+	for _, raw := range aggPaginatedData.Data {
 		var v *Video
 		if marshallErr := bson.Unmarshal(raw, &v); marshallErr == nil {
 			v.SignedUrl, _ = storageClient.Bucket(os.Getenv("GCP_STORAGE_BUCKET")).SignedURL(v.UUID, opts)
 			output = append(output, *v)
 		}
 	}
-	c.JSON(http.StatusOK, paginatedResults{Videos: output, Pagination: paginatedData.Pagination})
+
+	c.JSON(http.StatusOK, PaginatedResult{
+		Videos:     output,
+		Pagination: aggPaginatedData.Pagination,
+	})
 }
